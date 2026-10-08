@@ -238,19 +238,14 @@ export class Node {
       this.scheduleSnapshot();
     });
 
-    // A block arrived whose parent's state we no longer hold (pruned below the
-    // SNAPSHOT_DEPTH window, or below a snapshot anchor). Drop the snapshot so
-    // the next load replays from IDB blocks instead of trusting the anchor.
-    // Note the rolling state pruner means a replay keeps only the same window —
-    // a genuine reorg deeper than SNAPSHOT_DEPTH needs the Settings chain reset
-    // (wipe + network re-sync of the new branch). Practically unreachable given
-    // sync's 5-block overlap; stale fork blocks from peers land here too, and
-    // for those dropping the regenerable snapshot is harmless.
+    // A rejected block may extend an old fork below the retained state window.
+    // It leaves our verified chain unchanged, so keep its snapshot and header
+    // prefix: deleting them would force a full replay/re-download on reload.
+    // Restore integrity failures and explicit chain resets still discard caches.
+    // A genuine below-window reorg needs a chain reset; replaying the same old
+    // branch would only prune the required parent state again.
     this.chain.onSnapshotInvalidated(() => {
-      console.warn('[node] block references pruned state (reorg deeper than snapshot window?); clearing snapshot');
-      void delMeta('stateSnapshot');
-      void delMeta('headerChain'); // a fast-synced prefix anchors on the same snapshot
-      this.lastSnapshotHeight = -1;
+      console.warn('[node] rejected block references pruned state; keeping verified chain caches');
     });
 
     this.miner = new MinerController(

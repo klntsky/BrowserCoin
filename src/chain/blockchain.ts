@@ -119,10 +119,9 @@ export class Blockchain {
   /** Listeners invoked only when the canonical tip moves, with the mempool delta. */
   private tipChangeListeners = new Set<(d: ReorgDelta) => void>();
   /**
-   * Listeners fired when a block can only be validated against state below the
-   * snapshot anchor — state we don't hold after a snapshot restore. The node
-   * clears the persisted snapshot so the next load full-replays from genesis.
-   * Practically unreachable: it needs a reorg deeper than SNAPSHOT_DEPTH.
+   * Listeners fired when a candidate needs parent state we no longer hold.
+   * The candidate is rejected and the verified chain remains unchanged. Stale
+   * losing forks trigger this too; it does not prove our snapshot is invalid.
    */
   private snapshotInvalidatedListeners = new Set<() => void>();
 
@@ -212,8 +211,7 @@ export class Blockchain {
    * the same shape a snapshot-restored tab already runs in. The floor is
    * monotonic and each height is visited once, so cost is O(1) amortized per
    * accepted block. Trade-off: a reorg forking below the floor can't be
-   * validated (fires onSnapshotInvalidated) — it needs a reorg deeper than
-   * SNAPSHOT_DEPTH, which sync's 5-block overlap makes practically unreachable.
+   * validated (fires onSnapshotInvalidated), even for a stale losing fork.
    */
   private pruneStates(): void {
     const boundary = this.height - this.stateRetentionDepth;
@@ -248,7 +246,7 @@ export class Blockchain {
     return () => this.tipChangeListeners.delete(fn);
   }
 
-  /** Subscribe to snapshot-invalidation (a reorg below the snapshot anchor). */
+  /** Subscribe to candidate rejection because its parent state is unavailable. */
   onSnapshotInvalidated(fn: () => void): () => void {
     this.snapshotInvalidatedListeners.add(fn);
     return () => this.snapshotInvalidatedListeners.delete(fn);
@@ -385,9 +383,9 @@ export class Blockchain {
     // Apply all txs against parent state into a clone, verify final stateRoot.
     if (parent.state === null) {
       // Parent is a finalized-prefix block whose state we didn't materialize on
-      // snapshot restore. Extending it means a reorg deeper than SNAPSHOT_DEPTH —
-      // we can't validate without that state. Signal the node to drop the
-      // snapshot and full-replay, and reject this block for now.
+      // snapshot restore. We can't validate this candidate without that state.
+      // Signal the caller and reject it; an old losing fork can reach this path
+      // too, so this does not invalidate the chosen chain or its snapshot.
       for (const fn of this.snapshotInvalidatedListeners) fn();
       return 'parent state unavailable (reorg below snapshot anchor)';
     }
